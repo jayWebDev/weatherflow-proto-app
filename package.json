@@ -1,0 +1,23 @@
+{
+  "name": "weatherflow-proto-app",
+  "version": "1.0.0",
+  "description": "",
+  "main": "app.js",
+  "scripts": {
+    "start": "npm backend/server.js",
+    "server": "nodemon backend/server.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^0.21.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.0.0",
+    "express": "^4.17.3",
+    "express-async-handler": "^1.2.0"
+  },
+  "devDependencies": {
+    "concurrently": "^7.1.0",
+    "nodemon": "^2.0.15"
+  }
+}
