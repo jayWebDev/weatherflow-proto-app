@@ -11,7 +11,7 @@ const getData = asyncHandler(async (req, res) => {
 
 	try {
 		const response = await axios.get(url);
-
+		
 		res.status(200).json(response.data);
 	} catch (error) {
 		res.status(400);

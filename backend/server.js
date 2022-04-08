@@ -1,13 +1,16 @@
 const express = require('express');
 cors = require('cors');
 const { errorHandler } = require('./middleware/errorMiddleware');
-const dotenv = require('dotenv').config();
-const port = process.env.PORT || 5000;
+
+if (process.env.NODE_ENV !== 'production') {
+  require('dotenv').config();
+}
+const port = process.env.PORT || 3000;
 
 const app = express();
 const corsOptions = {
-  origin: 'http://127.0.0.1:5500',
-  optionsSuccessStatus: 200 // some legacy browsers (IE11, various SmartTVs) choke on 204
+  origin: ['http://127.0.0.1:5500', 'https://shoreco.dev/', 'localhost'],
+	optionsSuccessStatus: 200
 }
 app.use(cors(corsOptions));
 
