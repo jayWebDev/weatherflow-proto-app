@@ -42,6 +42,28 @@ class Spot {
 		this.marker = marker;
 	}
 
+	highlight() {
+		if (this.marker) {
+			const icon = getMarkerIcon(this, true);
+			const label = getMarkerLabel(this, true);
+
+			this.marker.setIcon(icon);
+			this.marker.setLabel(label);
+			this.marker.setZIndex(google.maps.Marker.MAX_ZINDEX);
+		}		
+	}
+
+	resetAppearance() {
+		if (this.marker) {
+			const icon = getMarkerIcon(this);
+			const label = getMarkerLabel(this);
+
+			this.marker.setIcon(icon);
+			this.marker.setLabel(label);
+			this.marker.setZIndex(google.maps.Marker.MAX_ZINDEX);
+		}		
+	}
+
 	select() {
 		this.selected = true;
 
@@ -55,6 +77,10 @@ class Spot {
 			this.marker.setLabel(label);
 			this.marker.setZIndex(google.maps.Marker.MAX_ZINDEX);
 		}
+	}
+
+	isSpotSelected() {
+		return this.selected;
 	}
 	
 	deselect() {
@@ -94,7 +120,7 @@ class Station {
 	}
 }
 
-let geocoder;
+let geocoder, PopupWindow;
 
 function initApp() {
 	const searchButton = document.getElementById('location-search-submit');
@@ -108,20 +134,84 @@ function initApp() {
 		fullscreenControl: false,
 		mapTypeControl: false,
 	});
+
+  class Popup extends google.maps.OverlayView {
+    position;
+    containerDiv;
+    constructor(marker, content) {
+			super();
+      this.marker = marker;
+      content.classList.add("popup-bubble");
+
+			const bubbleAnchor = document.createElement("div");
+
+      bubbleAnchor.classList.add("popup-bubble-anchor");
+      bubbleAnchor.appendChild(content);
+
+			this.containerDiv = document.createElement("div");
+      this.containerDiv.classList.add("popup-container");
+      this.containerDiv.appendChild(bubbleAnchor);
+
+			Popup.preventMapHitsAndGesturesFrom(this.containerDiv);
+    }
+
+		onAdd() {
+      this.getPanes().floatPane.appendChild(this.containerDiv);
+    }
+
+		onRemove() {
+      if (this.containerDiv.parentElement) {
+        this.containerDiv.parentElement.removeChild(this.containerDiv);
+      }
+    }
+
+		draw() {
+			const divPosition = this.getProjection().fromLatLngToDivPixel(
+				this.marker.getPosition()
+				);
+
+			const display =
+        Math.abs(divPosition.x) < 4000 && Math.abs(divPosition.y) < 4000
+				? "block"
+				: "none";
+
+      if (display === "block") {
+        this.containerDiv.style.left = (divPosition.x - 125) + "px";
+        this.containerDiv.style.top = (divPosition.y - 15) + "px";
+      }
+
+      if (this.containerDiv.style.display !== display) {
+        this.containerDiv.style.display = display;
+      }
+    }
+	}
+
+	PopupWindow = Popup;
 	
 	google.maps.event.addListenerOnce(appState['map'], 'bounds_changed', updateApp);
 	google.maps.event.addListener(appState['map'], 'dragend', updateApp);
 	google.maps.event.addListener(appState['map'], 'zoom_changed', updateApp);
-
-	createInfoWindow();
 	
-	searchButton.addEventListener('click', codeAddress)
+	searchButton.addEventListener('click', codeAddress);
 }
 
-const updateApp = () => {
+const updateApp = async () => {
+	destroyAllInfoWindows();
 	updateBounds(appState.map.getBounds());
 	resetListings();
-	updateAppData();
+	await updateAppData();
+	deselectAllSpots();
+
+	if (appState.activeSpot) {
+		const spot = appState.spots.find(spot => spot.id === appState.activeSpot.id);
+		
+		if (!spot) return;
+		
+		buildInfoWindowContent(spot);
+		bringSpotListingIntoView(spot);
+		selectSpot(spot);
+		setInfoWindowPositionAndShow(spot.marker.infoWindow);
+	};	
 }
 
 const codeAddress = () => {
@@ -161,7 +251,7 @@ const updateAppData = async () => {
 	setAppState(data);
 
 	addMarkers(appState.spots)
-	addSpotListings(appState.spots);
+	addSpotListings(appState.spots);	
 }
 
 const setAppSettings = (data) => {
@@ -177,6 +267,7 @@ const setAppState = (data) => {
 
 	appState['spot_count'] = data.spot_count;
 	appState['spots'] = createSpots(data.spots);
+	appState['listingCurrentIndex'] = 0;
 }
 
 const createSpots = (data) => {
@@ -210,11 +301,13 @@ const removeOutOfBoundsSpots = () => {
 	})
 }
 
-const createInfoWindow = () => {
-		appState['infoWindow'] =  new google.maps.InfoWindow({
-			content: buildInfoWindowContainer(),
-			maxWidth: 300,
-		});	
+const createInfoWindow = (marker, latLon) => {
+	marker['infoWindow'] = new PopupWindow(
+		marker,
+    buildInfoWindowContainer()
+	);
+	marker['infoWindow'].containerDiv.style.display = 'none';
+	marker['infoWindow'].setMap(appState.map);	
 }
 
 const addMarkers = (spots, map) => {
@@ -235,21 +328,66 @@ const addMarkers = (spots, map) => {
 
 		spot.addMarker(marker);
 		marker.setMap(appState.map);
+		createInfoWindow(marker, { lat: spot.lat, lng: spot.lon });
 		
 		marker.addListener('click', () => {
+			closeAllInfoWindows();
 			bringSpotListingIntoView(spot);
 			selectSpot(spot);
-
-			buildInfoWindowContent(spot, appState.infoWindow.content);
-
-			appState.infoWindow.open({
-				anchor: marker,
-				map: appState.map,
-				shouldFocus: false,
-			});
+			buildInfoWindowContent(spot);
+			setInfoWindowPositionAndShow(spot.marker.infoWindow);
 		});
 		
 	})
+}
+
+const setInfoWindowPositionAndShow = (infoWindow) => {
+	infoWindow.containerDiv.style.transform = 'translateY(-100%)';
+	infoWindow.containerDiv.style.display = 'block';
+	infoWindow.containerDiv.style.visibility = 'hidden';
+	
+	const infoWindowBounds = infoWindow.containerDiv.getBoundingClientRect();
+	const mapBounds = document.getElementById('app-map').getBoundingClientRect();
+	let translateX = 0;
+	let translateY = '-100%';
+	
+	if (infoWindowBounds.y < mapBounds.y) {
+		translateY = '30px';
+	}
+	
+	if (infoWindowBounds.bottom > mapBounds.bottom) {
+		translateY = '-100%';
+	}
+	
+	if (infoWindowBounds.x < mapBounds.x) {
+		translateX = '50%';
+	}
+	else if (infoWindowBounds.right > mapBounds.right) {
+		translateX = '-50%';
+	}
+	
+	infoWindow.containerDiv.style.transform = `translate(${translateX}, ${translateY})`;
+	infoWindow.containerDiv.style.visibility = 'visible';
+}
+
+const closeAllInfoWindows = () => {
+	if (!appState.spots) return;
+
+	appState.spots.forEach(spot => {
+		spot.marker.infoWindow.containerDiv.style.display = 'none';
+		spot.marker.infoWindow.containerDiv.style.visibility = 'hidden';
+		spot.deselect();
+	});
+}
+
+const destroyAllInfoWindows = () => {
+	document.querySelectorAll('.popup-container').forEach(popup => popup.remove());
+}
+
+const deselectAllSpots = () => {
+	if (!appState.spots) return;
+
+	appState.spots.forEach(spot => spot.deselect());
 }
 
 const addSpotListings = (spots, endIndex) => {
@@ -278,7 +416,8 @@ const addSpotListings = (spots, endIndex) => {
 		if (listingLocation) spotListing.appendChild(listingLocation);
 	
 		spotListing.addEventListener('click', handleListingClick(spot));
-		spotListing.addEventListener('mouseenter', handleListingMouseEnter(spot));
+		spotListing.addEventListener('mouseover', handleListingMouseOver(spot));
+		spotListing.addEventListener('mouseout', handleListingMouseOut(spot));
 		
 		spotListingsContainer.appendChild(spotListing);
 		spot['listing'] = spotListing;
@@ -305,13 +444,13 @@ const addSpotListings = (spots, endIndex) => {
 }
 
 const removeSpotListings = () => {
-		const spotListingsContainer = document.getElementById('spot-listings');
+	const spotListingsContainer = document.getElementById('spot-listings');
 
 	spotListingsContainer.innerHTML = '';
 }
 
 const resetListingState = () => {
-	appState.listingCurrentIndex = 0;
+	appState['listingCurrentIndex'] = 0;
 }
 
 const resetListings = () => {
@@ -361,11 +500,24 @@ const buildInfoWindowContainer = () => {
 }
 
 const buildInfoWindowContent = (spot) => {
+	if (spot.marker.infoWindow.containerDiv.querySelector('.info-window__header')) return;
+	
 	const infoWindowBody = document.createElement('div');
 	const infoWindowHeader = buildInfoWindowHeader(spot);
 	const windWeather = buildInfoWindowWindWeather(spot);
 	const airWeather = buildInfoWindowAirWeather(spot);
 	const location = buildInfoWindowLocation(spot);
+	const infoWindow = spot.marker.infoWindow.containerDiv.querySelector('.info-window');
+	const closeButton = document.createElement('button');
+
+	closeButton.classList.add('info-window__close-button');
+	closeButton.innerHTML = `<svg aria-hidden="true" focusable="false"><use xlink:href="#x"></use></svg>`;
+
+	closeButton.addEventListener('click', (e) => {
+		e.target.closest('.popup-container').style.display = 'none';
+		e.target.closest('.popup-container').style.visibility = 'hidden';
+		spot.deselect();
+	});
 
 	infoWindowHeader.classList.add('info-window__header');
 	infoWindowBody.classList.add('info-window__body');
@@ -373,9 +525,9 @@ const buildInfoWindowContent = (spot) => {
 	infoWindowBody.appendChild(airWeather);
 	if (location) infoWindowBody.appendChild(location);
 
-	appState.infoWindow.content.innerHTML = '';
-	appState.infoWindow.content.appendChild(infoWindowHeader);
-	appState.infoWindow.content.appendChild(infoWindowBody);	
+	infoWindow.appendChild(closeButton);
+	infoWindow.appendChild(infoWindowHeader);
+	infoWindow.appendChild(infoWindowBody);	
 }
 
 const buildInfoWindowHeader = (spot) => {
@@ -461,22 +613,31 @@ const buildInfoWindowAirWeather = (spot) => {
 const handleListingClick = (spot) => {
 	return (e) => {
 		e.preventDefault();
-		
-			buildInfoWindowContent(spot, appState.infoWindow.content);
 
-			appState.infoWindow.open({
-				anchor: spot.marker,
-				map: appState.map,
-				shouldFocus: false,
-			});
+		buildInfoWindowContent(spot);
+		closeAllInfoWindows();
+		selectSpot(spot);
+
+		setInfoWindowPositionAndShow(spot.marker.infoWindow);
 	}
 }
 
-const handleListingMouseEnter = (spot) => {
+const handleListingMouseOver = (spot) => {
 	return (e) => {
 		e.preventDefault();
 		
-		selectSpot(spot);
+		
+		spot.highlight();
+	}
+}
+
+const handleListingMouseOut = (spot) => {
+	return (e) => {
+		e.preventDefault();
+		
+		if (spot.selected === true) return;
+
+		spot.resetAppearance();
 	}
 }
 
@@ -503,12 +664,11 @@ const bringSpotListingIntoView = (spot) => {
 	let renderedSpotListing;
 
 	if (isSpotListingRendered(spot)) {
-    console.log("🚀 ~ bringSpotListingIntoView ~ isSpotListingRendered()", isSpotListingRendered())
 		getSpotListingElement(spot).scrollIntoView({ behavior: "smooth" });
 		return;
 	};
 
-	showMoreButton.remove();
+	if (showMoreButton) showMoreButton.remove();
 	addSpotListings(spots, spotIndex + 1);
 	
 	renderedSpotListing = document.getElementById(spot.id);
@@ -563,7 +723,7 @@ const fetchData = async (queryString) => {
 
 const getMarkerIcon = (spot, active) => {
 	const markerIconPath = 'M437,75c100,100,100,262.1,0,362S175,537,75,437S-25,175,75,75S337-25,437,75z M255.9,394c9,0.1,17-5.4,20.5-13.9l79.2-198 c3.8-9.6,0.4-20.9-8.3-26.5c-8.7-5.7-20.4-4.5-27.1,2.2L256,222.1l-63.6-63.6c-7.4-7.4-19-8.6-27.7-2.8c-1.3,0.8-2.4,1.8-2.8,2.2 c-6.9,6.9-8.8,16.1-5.5,24.3l79.2,198C239,388.6,247.6,393.4,255.9,394L255.9,394z';
-	const color = spot.organization === 'WeatherFlow' ? 'hsla(110, 100%, 31%, 1.0)' : getMarkerColor(spot.stations[0].values.avg, active);
+	const color = spot.organization === 'WeatherFlow' ? getMarkerColor(spot.stations[0].values.avg, active, true) : getMarkerColor(spot.stations[0].values.avg, active);
 	const scale = 0.05;
 	const rotation = spot.stations[0].values.dir;
 	const strokeColor = 'white';
@@ -579,7 +739,7 @@ const getMarkerIcon = (spot, active) => {
 		strokeWeight,
 		scale,
 		rotation,
-		anchor: new google.maps.Point(0, 0),
+		anchor: new google.maps.Point(256, 256),
 		labelOrigin: new google.maps.Point(256, 256),
 		origin: new google.maps.Point(256, 256),
 	}
@@ -599,12 +759,12 @@ const getMarkerLabel = (spot, active) => {
 	}
 }
 
-const getMarkerColor = (avg, active) => {
+const getMarkerColor = (avg, active, wf) => {
 	if (active) return 'hsla(27, 100%, 44%, 1.0)';
 
 	const hue = 200 + (200 * (avg / 200));
 
-	return `hsla(${hue}, 90%, 50%, 1)`;
+	return wf ? 'hsla(110, 100%, 31%, 1.0)' :`hsla(${hue}, 90%, 50%, 1)`;
 }
 
 const initViewportHeightFix = (() => {
